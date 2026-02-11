@@ -1,82 +1,76 @@
-import { Schema, Context, segment, version } from 'koishi'
+import { Context, Schema, h, Logger } from 'koishi'
 
-export const name = 'nyan'
+export const name = 'nyan-fork'
 
-type Opt = {
-  noises: string[]
+// 日志记录器
+const logger = new Logger('nyan-fork')
+
+// 配置类型定义
+export interface Config {
+  noises: Array<{
+    是否启用: boolean
+    语气词: string
+  }>
   transformLastLineOnly: boolean
-  legacyMode: boolean
-  trailing: {
-    append: string
-    transform: Array<{
-      occurrence: string
-      replaceWith: string
-    }>
-  }
+  appendIfNoTrailing: string
+  trailing: Array<{
+    替换目标: string
+    替换结果: string
+  }>
 }
 
-const [major, minor] = (version as string).split('.').map(i => parseInt(i))
+// 配置 Schema
+export const Config: Schema<Config> = Schema.intersect([
+  Schema.object({
+    transformLastLineOnly: Schema.boolean()
+      .default(true)
+      .description('只在发送文本的最后一行进行卖萌，否则每行都进行语气词替换'),
+    noises: Schema.array(Schema.object({
+      是否启用: Schema.boolean().default(true).description('是否启用此语气词'),
+      语气词: Schema.string().required().description('语气词内容'),
+    })).role('table').default([
+      { 是否启用: true, 语气词: '喵' },
+      { 是否启用: false, 语气词: 'nya' },
+      { 是否启用: false, 语气词: '汪' }
+    ]).description('随机取勾选的语气词中的一个作为语句结尾'),
+  }).description('基础配置'),
 
-const fallback = major === 4 && minor < 10
+  Schema.object({
+    appendIfNoTrailing: Schema.string()
+      .default('~')
+      .description('没有标点的句末后面会被加上这个'),
+    trailing: Schema.array(Schema.object({
+      替换目标: Schema.string().required().description('要被替换的标点符号'),
+      替换结果: Schema.string().required().description('替换后的标点符号'),
+    })).role('table').default([
+      { 替换目标: '，', 替换结果: '~' },
+      { 替换目标: '。', 替换结果: '~' },
+      { 替换目标: ',', 替换结果: '~' },
+      { 替换目标: '.', 替换结果: '~' }
+    ]).description('替换发送消息中的标点符号，两个以上连在一起的标点不会被替换')
+  }).description('标点控制'),
+])
 
-export const schema = Schema.object({
-  noises: Schema.array(String)
-    .default(['喵'])
-    .description('您的bot会在最后发出什么声音?'),
 
-  transformLastLineOnly: Schema.boolean()
-    .default(false)
-    .description('只在最后一行卖萌，默认每行都卖。'),
-
-  legacyMode: Schema.boolean()
-    .default(fallback)
-    .description('兼容性模式，非必要不需要开。4.10以后默认关闭。'),
-
-  trailing: Schema.object({
-    append: Schema.string()
-      .default('')
-      .description('没有标点的句末后面会被加上这个，可以设置为比如`~`'),
-
-    transform: Schema.array(
-      Schema.object({
-        occurrence: Schema.string()
-          .required()
-          .description('要被替换掉的标点符号'),
-        replaceWith: Schema.string()
-          .required()
-          .description('要替换为的标点符号')
-      })
-    )
-      .default([
-        { occurrence: '.', replaceWith: '~' },
-        { occurrence: '。', replaceWith: '～' }
-      ])
-      .description(
-        '替换掉据尾的标点符号，两个以上连在一起的标点符号不会被换掉。*只对标点符号有反应！*'
-      )
-  }).description('设置如何处理句尾')
-})
-
-// non-handling matches
+// 不处理的匹配规则
 const madeNoise = /喵([^\p{L}\d\s@#]+)?( +)?$/u
 const trailingURL =
   /[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{2,6}\b([-a-zA-Z0-9()@:%_+.~#?&//<>{}]*)?$/u
-const endsWithCQCode = /\[[cqCQ](.*)\]$/u
 
-// matcher
+// 匹配句尾字符
 const trailingChars =
   /(?<content>.*?)(?<trailing>[^\p{L}\d\s@#]+)?(?<trailingSpace> +)?$/u
 
+// 模板字符串处理，带默认值
 const withDefault =
-  (_default: any) =>
-    (template: TemplateStringsArray, ...args: any[]) => {
+  (_default: string) =>
+    (template: TemplateStringsArray, ...args: (string | undefined)[]) => {
       let returnValue = ''
       template.forEach((val, index) => {
         returnValue += val
-        if (args[index] === false) {
-          returnValue += 'false'
-        } else if (args[index]) {
-          returnValue += args[index]
+        const arg = args[index]
+        if (arg !== undefined) {
+          returnValue += arg
         } else {
           returnValue += _default
         }
@@ -84,28 +78,35 @@ const withDefault =
       return returnValue
     }
 
+// 转换句尾标点符号
 const _transform = (
   trailingChars: string,
-  transforms: Opt['trailing']['transform']
-) => {
-  // expect transforms is not empty
+  transforms: Config['trailing']
+): string => {
   const last = trailingChars.slice(-1)
 
-  // not handling anything that repeats eg. .. ,, 。。
+  // 不处理重复的标点符号，如 .. ,, 。。
   if (trailingChars.length > 1) {
     const secondLast = trailingChars.slice(-2, -1)
     if (last === secondLast) return trailingChars
   }
 
-  for (const { occurrence, replaceWith } of transforms) {
-    if (last !== occurrence) continue
-    return trailingChars.slice(0, -1) + replaceWith
+  // 查找并替换匹配的标点符号
+  for (const item of transforms) {
+    if (last !== item.替换目标) continue
+    return trailingChars.slice(0, -1) + item.替换结果
   }
   return trailingChars
 }
 
-const processSingleLine = (noiseMaker: () => string, { trailing: { append, transform }, transformLastLineOnly }: Opt) => (line, index, lines) => {
-  // unhandled conditions
+// 处理单行文本
+const processSingleLine = (
+  noiseMaker: () => string,
+  config: Config
+) => (line: string, index: number, lines: string[]): string => {
+  const { trailing, appendIfNoTrailing, transformLastLineOnly } = config
+
+  // 不处理的情况
   if (transformLastLineOnly && index < lines.length - 1) {
     return line
   }
@@ -115,114 +116,121 @@ const processSingleLine = (noiseMaker: () => string, { trailing: { append, trans
   if (madeNoise.test(line)) {
     return line
   }
-  if (endsWithCQCode.test(line)) {
-    return line
-  }
   if (trailingURL.test(line)) {
     return line
   }
 
-  // handled
+  // 处理行内容
   const noise = noiseMaker()
-  let {
-    groups: { content, trailing, trailingSpace }
-  } = line.match(trailingChars)
+  const match = line.match(trailingChars)
+  if (!match || !match.groups) return line
 
-  if (!trailing) trailing = append
-  else if (transform.length) trailing = _transform(trailing, transform)
+  let { content, trailing: trailingPunct, trailingSpace } = match.groups
 
-  line = withDefault('')`${content}${noise}${trailing}${trailingSpace}`
-  return line
+  if (!trailingPunct) {
+    trailingPunct = appendIfNoTrailing
+  } else if (trailing.length) {
+    trailingPunct = _transform(trailingPunct, trailing)
+  }
+
+  return withDefault('')`${content}${noise}${trailingPunct}${trailingSpace}`
 }
 
-const nyan = (
-  _elements: segment[] | undefined,
+// 处理消息元素
+const processElements = (
+  elements: h[],
   noiseMaker: () => string,
-  options: Opt
-) => {
-  const { transformLastLineOnly } = options
-  if (!_elements?.length) return _elements
+  config: Config
+): h[] => {
+  const { transformLastLineOnly } = config
+  if (!elements?.length) return elements
 
-  const elements = [..._elements]
+  const result: h[] = []
 
-  // preserve empty lines at the end of the message. It's totally useless but why not?
-  const end: segment[] = []
+  // 保留消息末尾的空行
+  const end: h[] = []
   for (let i = elements.length - 1; i >= 0; i--) {
-    const line = elements[i]
-    if (line.type === 'text' && line.attrs.content !== '') { break }
-    end.push(line)
-    elements.pop()
+    const element = elements[i]
+    if (element.type === 'text' && element.attrs.content && element.attrs.content.trim() !== '') {
+      break
+    }
+    end.unshift(elements[i])
+  }
+  const mainElements = elements.slice(0, elements.length - end.length)
+
+  // 转换消息
+  for (let i = 0; i < mainElements.length; i++) {
+    const element = mainElements[i]
+
+    // 只处理文本元素
+    if (element.type !== 'text') {
+      result.push(element)
+      continue
+    }
+
+    // 跳过最后一行之前的内容（如果配置了只转换最后一行）
+    if (transformLastLineOnly && i < mainElements.length - 1) {
+      result.push(element)
+      continue
+    }
+
+    const content = element.attrs.content || ''
+    const lines = content.split('\n')
+    const processedLines = lines.map(processSingleLine(noiseMaker, config))
+
+    result.push(h.text(processedLines.join('\n')))
   }
 
-  // transform message
-  const returnValue = elements
-    .map((seg: segment, index: number, lines: segment[]): segment => {
-      // unhandled conditions
-      if (transformLastLineOnly && index < lines.length - 1) {
-        return seg
-      }
-      if (seg.type !== 'text') return seg
-
-      const _lines = seg.attrs.content.split('\n').map(processSingleLine(noiseMaker, options))
-
-      seg.attrs.content = _lines.join('\n')
-      return seg
-    })
-    // append trailing spaces
-    .concat(end.reverse())
-  return returnValue
+  return result.concat(end)
 }
 
-// TODO: use element api, only handles string content.
-const nyanLegacy = (
-  _message: string,
-  noiseMaker: () => string,
-  options
-) => {
-  if (!_message) return _message
-
-  // preserve empty lines at the end of the message. It's totally useless but why not?
-  const message: string[] = _message?.split?.('\n')
-  const end = []
-  for (let i = message.length - 1; i >= 0; i--) {
-    const line = message[i]
-    if (line.trim() !== '') break
-    end.push(line)
-    message.pop()
-  }
-
-  // transform message
-  const returnValue = message
-    .map(processSingleLine(noiseMaker, options))
-    // append trailing spaces
-    .concat(end.reverse())
-    .join('\n')
-  return returnValue
-}
-
-const shuffle = <T>(arr: T[]) =>
+// 随机打乱数组
+const shuffle = <T>(arr: T[]): T[] =>
   arr
     .map((value: T) => ({ value, sort: Math.random() }))
-    .sort((a: { sort: number }, b: { sort: number }) => a.sort - b.sort)
+    .sort((a, b) => a.sort - b.sort)
     .map(({ value }) => value)
 
-const makeNoise = (noises: string[]) => {
-  let randomNoise = shuffle([...noises])
-  return function makeNoise () {
-    if (randomNoise.length === 0) randomNoise = shuffle([...noises])
-    return randomNoise.pop()
+// 创建语气词生成器
+const makeNoise = (noises: Config['noises']): (() => string) => {
+  // 只使用启用的语气词
+  const enabledNoises = noises
+    .filter(item => item.是否启用)
+    .map(item => item.语气词)
+
+  // 如果没有启用的语气词，返回空字符串
+  if (enabledNoises.length === 0) {
+    return () => ''
+  }
+
+  let randomNoise = shuffle([...enabledNoises])
+  return function () {
+    if (randomNoise.length === 0) {
+      randomNoise = shuffle([...enabledNoises])
+    }
+    return randomNoise.pop()!
   }
 }
 
-export function apply (ctx: Context, options: Opt) {
-  const { noises } = options
+// 插件主函数
+export function apply(ctx: Context, config: Config) {
 
-  ctx.any().on('before-send', (session) => {
-    const noiseMaker = makeNoise(noises)
-    if (options.legacyMode) {
-      session.content = nyanLegacy(session.content, noiseMaker, options)
-    } else {
-      session.elements = nyan(session.elements, noiseMaker, options)
+  // 监听消息发送前事件
+  const dispose = ctx.on('before-send', (session) => {
+    try {
+      const noiseMaker = makeNoise(config.noises)
+
+      // 处理消息元素
+      if (session.elements && Array.isArray(session.elements)) {
+        session.elements = processElements(session.elements, noiseMaker, config)
+      }
+    } catch (error) {
+      logger.error('处理消息时出错:', error)
     }
+  })
+
+  // 生命周期管理
+  ctx.on('dispose', () => {
+    dispose()
   })
 }

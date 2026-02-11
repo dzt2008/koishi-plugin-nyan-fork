@@ -1,16 +1,16 @@
 {
-  "name": "koishi-plugin-nyan",
+  "name": "koishi-plugin-nyan-fork",
   "version": "1.2.4",
   "description": "一键变猫",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
     "lib",
-    "dist"
+    "src"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/ArilyChan/arilychan/plugins/nyan"
+    "url": "git+https://github.com/dzt2008/koishi-plugin-nyan-fork.git"
   },
   "keywords": [
     "koishi",
