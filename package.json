@@ -2,14 +2,12 @@
   "name": "koishi-plugin-nyan",
   "version": "1.2.4",
   "description": "一键变猫",
-  "peerDependencies": {
-    "koishi": "^4.0.0"
-  },
-  "koishi": {
-    "description": {
-      "zh": "一键变🐱插件（🐶也行）"
-    }
-  },
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "dist"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/ArilyChan/arilychan/plugins/nyan"
@@ -22,12 +20,12 @@
     "moe",
     "nya"
   ],
-  "main": "lib/index.js",
-  "typings": "lib/index.d.ts",
-  "files": [
-    "lib",
-    "dist"
-  ],
-  "author": "arily",
-  "license": "MIT"
+  "koishi": {
+    "description": {
+      "zh": "一键变🐱插件（🐶也行）"
+    }
+  },
+  "peerDependencies": {
+    "koishi": "^4.0.0"
+  }
 }
