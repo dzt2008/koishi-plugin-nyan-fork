@@ -8,14 +8,14 @@ const logger = new Logger('nyan-fork')
 // 配置类型定义
 export interface Config {
   noises: Array<{
-    是否启用: boolean
-    语气词: string
+    enabled: boolean
+    word: string
   }>
   transformLastLineOnly: boolean
   appendIfNoTrailing: string
   trailing: Array<{
-    替换目标: string
-    替换结果: string
+    target: string
+    replacement: string
   }>
 }
 
@@ -26,12 +26,12 @@ export const Config: Schema<Config> = Schema.intersect([
       .default(true)
       .description('只在发送文本的最后一行进行卖萌，否则每行都进行语气词替换'),
     noises: Schema.array(Schema.object({
-      是否启用: Schema.boolean().default(true).description('是否启用此语气词'),
-      语气词: Schema.string().required().description('语气词内容'),
+      enabled: Schema.boolean().default(true).description('是否启用此语气词'),
+      word: Schema.string().required().description('语气词内容'),
     })).role('table').default([
-      { 是否启用: true, 语气词: '喵' },
-      { 是否启用: false, 语气词: 'nya' },
-      { 是否启用: false, 语气词: '汪' }
+      { enabled: true, word: '喵' },
+      { enabled: false, word: 'nya' },
+      { enabled: false, word: '汪' }
     ]).description('随机取勾选的语气词中的一个作为语句结尾'),
   }).description('基础配置'),
 
@@ -40,13 +40,13 @@ export const Config: Schema<Config> = Schema.intersect([
       .default('~')
       .description('没有标点的句末后面会被加上这个'),
     trailing: Schema.array(Schema.object({
-      替换目标: Schema.string().required().description('要被替换的标点符号'),
-      替换结果: Schema.string().required().description('替换后的标点符号'),
+      target: Schema.string().required().description('要被替换的标点符号'),
+      replacement: Schema.string().required().description('替换后的标点符号'),
     })).role('table').default([
-      { 替换目标: '，', 替换结果: '~' },
-      { 替换目标: '。', 替换结果: '~' },
-      { 替换目标: ',', 替换结果: '~' },
-      { 替换目标: '.', 替换结果: '~' }
+      { target: '，', replacement: '~' },
+      { target: '。', replacement: '~' },
+      { target: ',', replacement: '~' },
+      { target: '.', replacement: '~' }
     ]).description('替换发送消息中的标点符号，两个以上连在一起的标点不会被替换')
   }).description('标点控制'),
 ])
@@ -93,8 +93,8 @@ const _transform = (
 
   // 查找并替换匹配的标点符号
   for (const item of transforms) {
-    if (last !== item.替换目标) continue
-    return trailingChars.slice(0, -1) + item.替换结果
+    if (last !== item.target) continue
+    return trailingChars.slice(0, -1) + item.replacement
   }
   return trailingChars
 }
@@ -195,8 +195,8 @@ const shuffle = <T>(arr: T[]): T[] =>
 const makeNoise = (noises: Config['noises']): (() => string) => {
   // 只使用启用的语气词
   const enabledNoises = noises
-    .filter(item => item.是否启用)
-    .map(item => item.语气词)
+    .filter(item => item.enabled)
+    .map(item => item.word)
 
   // 如果没有启用的语气词，返回空字符串
   if (enabledNoises.length === 0) {
@@ -215,8 +215,10 @@ const makeNoise = (noises: Config['noises']): (() => string) => {
 // 插件主函数
 export function apply(ctx: Context, config: Config) {
 
-  // 监听消息发送前事件
   const dispose = ctx.on('before-send', (session) => {
+    // 手动应用过滤器
+    if (!ctx.filter(session)) return
+
     try {
       const noiseMaker = makeNoise(config.noises)
 
