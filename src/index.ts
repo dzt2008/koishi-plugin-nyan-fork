@@ -2,10 +2,8 @@ import { Context, Schema, h, Logger } from 'koishi'
 
 export const name = 'nyan-fork'
 
-// 日志记录器
 const logger = new Logger('nyan-fork')
 
-// 配置类型定义
 export interface Config {
   noises: Array<{
     enabled: boolean
@@ -19,7 +17,6 @@ export interface Config {
   }>
 }
 
-// 配置 Schema
 export const Config: Schema<Config> = Schema.intersect([
   Schema.object({
     transformLastLineOnly: Schema.boolean()
