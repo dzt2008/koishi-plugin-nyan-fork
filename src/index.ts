@@ -18,7 +18,18 @@ export interface Config {
     target: string
     replacement: string
   }>
-  excludeUsers: string[]
+  filterMode: 'blacklist' | 'whitelist'
+  blacklist?: Array<{
+    type: 'userId' | 'channelId' | 'guildId' | 'platform'
+    value: string
+    reason?: string
+  }>
+  whitelist?: Array<{
+    type: 'userId' | 'channelId' | 'guildId' | 'platform'
+    value: string
+    reason?: string
+  }>
+  logBlocked: boolean
 }
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -52,10 +63,38 @@ export const Config: Schema<Config> = Schema.intersect([
   }).description('标点控制'),
 
   Schema.object({
-    excludeUsers: Schema.array(Schema.string())
-      .default([])
-      .description('不处理这些用户触发的回复（填写平台用户ID，如 QQ 号）')
-  }).description('过滤设置'),
+    filterMode: Schema.union(['blacklist', 'whitelist']).description('消息过滤模式').default('blacklist'),
+    logBlocked: Schema.boolean().description('是否记录被屏蔽消息的日志').default(false),
+  }).description('消息级过滤'),
+
+  Schema.union([
+    Schema.object({
+      filterMode: Schema.const('blacklist'),
+      blacklist: Schema.array(Schema.object({
+        type: Schema.union([
+          Schema.const('userId').description('用户 ID'),
+          Schema.const('channelId').description('频道 ID'),
+          Schema.const('guildId').description('群组 ID'),
+          Schema.const('platform').description('平台名称'),
+        ]).description('过滤类型').role('radio').default('userId'),
+        value: Schema.string().description('过滤值').required(),
+        reason: Schema.string().description('过滤原因（备注）'),
+      })).role('table').description('消息黑名单规则').default([]),
+    }),
+    Schema.object({
+      filterMode: Schema.const('whitelist').required(),
+      whitelist: Schema.array(Schema.object({
+        type: Schema.union([
+          Schema.const('userId').description('用户 ID'),
+          Schema.const('channelId').description('频道 ID'),
+          Schema.const('guildId').description('群组 ID'),
+          Schema.const('platform').description('平台名称'),
+        ]).description('过滤类型').role('radio').default('userId'),
+        value: Schema.string().description('过滤值').required(),
+        reason: Schema.string().description('过滤原因（备注）'),
+      })).role('table').description('消息白名单规则').default([]),
+    }),
+  ]),
 ])
 
 
@@ -219,37 +258,85 @@ const makeNoise = (noises: Config['noises']): (() => string) => {
   }
 }
 
+// 检查过滤器规则
+const checkFilter = async (
+  session: any,
+  config: Config,
+  ctx: Context
+): Promise<boolean> => {
+  // 获取会话信息
+  const platform = session.platform
+  const channelId = session.channelId
+  const guildId = session.guildId
+
+  // 获取平台用户ID
+  let platformUserId: string | undefined
+  if (session.user && ctx.database) {
+    try {
+      const userId = session.user['id']
+      if (userId) {
+        const bindings = await ctx.database.get('binding', {
+          aid: userId,
+          platform: platform
+        })
+        if (bindings.length > 0) {
+          platformUserId = bindings[0].pid
+        }
+      }
+    } catch (error) {
+      logger.error('查询用户绑定信息失败:', error)
+    }
+  }
+
+  // 根据过滤模式检查
+  const rules = config.filterMode === 'blacklist' ? config.blacklist : config.whitelist
+
+  if (!rules || rules.length === 0) {
+    // 没有配置规则时的默认行为
+    return config.filterMode === 'blacklist' // 黑名单模式默认通过，白名单模式默认拦截
+  }
+
+  // 检查是否匹配规则
+  const matched = rules.some(rule => {
+    switch (rule.type) {
+      case 'userId':
+        return platformUserId && rule.value === platformUserId
+      case 'channelId':
+        return channelId && rule.value === channelId
+      case 'guildId':
+        return guildId && rule.value === guildId
+      case 'platform':
+        return platform && rule.value === platform
+      default:
+        return false
+    }
+  })
+
+  // 黑名单模式：匹配则拦截，白名单模式：匹配则通过
+  const shouldProcess = config.filterMode === 'blacklist' ? !matched : matched
+
+  // 记录日志
+  if (!shouldProcess && config.logBlocked) {
+    logger.info('消息被过滤器拦截', {
+      mode: config.filterMode,
+      userId: platformUserId,
+      channelId,
+      guildId,
+      platform
+    })
+  }
+
+  return shouldProcess
+}
+
 // 插件主函数
 export function apply(ctx: Context, config: Config) {
 
   const dispose = ctx.on('before-send', async (session) => {
-    // 检查是否配置了排除用户列表
-    if (config.excludeUsers && config.excludeUsers.length > 0) {
-      // 尝试从 session.user 获取平台用户ID
-      if (session.user && session.platform && ctx.database) {
-        try {
-          const userId = session.user['id']
-          if (userId) {
-            // 查询 binding 表获取平台用户ID
-            const bindings = await ctx.database.get('binding', {
-              aid: userId,
-              platform: session.platform
-            })
-
-            if (bindings.length > 0) {
-              const platformUserId = bindings[0].pid
-
-              // 检查用户是否在排除列表中
-              if (config.excludeUsers.includes(platformUserId)) {
-                logger.info('用户在排除列表中，跳过处理:', platformUserId)
-                return
-              }
-            }
-          }
-        } catch (error) {
-          logger.error('查询用户绑定信息失败:', error)
-        }
-      }
+    // 检查过滤器
+    const shouldProcess = await checkFilter(session, config, ctx)
+    if (!shouldProcess) {
+      return
     }
 
     try {
