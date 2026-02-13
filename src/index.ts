@@ -1,11 +1,19 @@
 import { Context, Schema, h, Logger } from 'koishi'
 
+export const reusable = false
+export const filter = false
+
 export const name = 'nyan-fork'
 export const inject = {
   required: ['database'],
   // optional: ['']
 };
 const logger = new Logger('nyan-fork')
+
+export const usage = `
+---
+`;
+
 
 export interface Config {
   noises: Array<{

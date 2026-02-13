@@ -1,8 +1,11 @@
 import { Context, Schema } from 'koishi';
+export declare const reusable = false;
+export declare const filter = false;
 export declare const name = "nyan-fork";
 export declare const inject: {
     required: string[];
 };
+export declare const usage = "\n---\n";
 export interface Config {
     noises: Array<{
         enabled: boolean;
