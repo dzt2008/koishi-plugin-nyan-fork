@@ -18,6 +18,7 @@ export interface Config {
     target: string
     replacement: string
   }>
+  excludeUsers: string[]
 }
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -49,6 +50,12 @@ export const Config: Schema<Config> = Schema.intersect([
       { target: '.', replacement: '~' }
     ]).description('替换发送消息中的标点符号，两个以上连在一起的标点不会被替换')
   }).description('标点控制'),
+
+  Schema.object({
+    excludeUsers: Schema.array(Schema.string())
+      .default([])
+      .description('不处理这些用户触发的回复（填写平台用户ID，如 QQ 号）')
+  }).description('过滤设置'),
 ])
 
 
@@ -216,42 +223,32 @@ const makeNoise = (noises: Config['noises']): (() => string) => {
 export function apply(ctx: Context, config: Config) {
 
   const dispose = ctx.on('before-send', async (session) => {
-    // 尝试从 session.user 获取平台用户ID
-    if (session.user && session.platform && ctx.database) {
-      try {
-        const userId = session.user['id']
-        if (userId) {
-          // 查询 binding 表获取平台用户ID
-          const bindings = await ctx.database.get('binding', {
-            aid: userId,
-            platform: session.platform
-          })
+    // 检查是否配置了排除用户列表
+    if (config.excludeUsers && config.excludeUsers.length > 0) {
+      // 尝试从 session.user 获取平台用户ID
+      if (session.user && session.platform && ctx.database) {
+        try {
+          const userId = session.user['id']
+          if (userId) {
+            // 查询 binding 表获取平台用户ID
+            const bindings = await ctx.database.get('binding', {
+              aid: userId,
+              platform: session.platform
+            })
 
-          if (bindings.length > 0) {
-            const platformUserId = bindings[0].pid
-            logger.info('查询到平台用户ID:', platformUserId)
+            if (bindings.length > 0) {
+              const platformUserId = bindings[0].pid
 
-            // 临时设置 userId 用于过滤检查
-            const originalUserId = session.userId
-            session.userId = platformUserId
-
-            // 使用修改后的 session 进行过滤检查
-            const filterResult = ctx.filter(session)
-            logger.info('过滤器结果:', filterResult, '用户ID:', platformUserId)
-
-            // 恢复原始 userId
-            session.userId = originalUserId
-
-            if (!filterResult) {
-              logger.info('过滤器拦截，跳过处理')
-              return
+              // 检查用户是否在排除列表中
+              if (config.excludeUsers.includes(platformUserId)) {
+                logger.info('用户在排除列表中，跳过处理:', platformUserId)
+                return
+              }
             }
-          } else {
-            logger.info('未找到用户绑定信息，跳过过滤')
           }
+        } catch (error) {
+          logger.error('查询用户绑定信息失败:', error)
         }
-      } catch (error) {
-        logger.error('查询用户绑定信息失败:', error)
       }
     }
 
