@@ -3,7 +3,7 @@ import { Context, Schema, h, Logger } from 'koishi'
 export const name = 'nyan-fork'
 export const inject = {
   required: ['database'],
-  optional: ['']
+  // optional: ['']
 };
 const logger = new Logger('nyan-fork')
 
