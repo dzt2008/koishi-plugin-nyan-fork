@@ -1,7 +1,10 @@
 import { Context, Schema, h, Logger } from 'koishi'
 
 export const name = 'nyan-fork'
-
+export const inject = {
+  required: ['database'],
+  optional: ['']
+};
 const logger = new Logger('nyan-fork')
 
 export interface Config {
@@ -212,9 +215,45 @@ const makeNoise = (noises: Config['noises']): (() => string) => {
 // 插件主函数
 export function apply(ctx: Context, config: Config) {
 
-  const dispose = ctx.on('before-send', (session) => {
-    // 手动应用过滤器
-    if (!ctx.filter(session)) return
+  const dispose = ctx.on('before-send', async (session) => {
+    // 尝试从 session.user 获取平台用户ID
+    if (session.user && session.platform && ctx.database) {
+      try {
+        const userId = session.user['id']
+        if (userId) {
+          // 查询 binding 表获取平台用户ID
+          const bindings = await ctx.database.get('binding', {
+            aid: userId,
+            platform: session.platform
+          })
+
+          if (bindings.length > 0) {
+            const platformUserId = bindings[0].pid
+            logger.info('查询到平台用户ID:', platformUserId)
+
+            // 临时设置 userId 用于过滤检查
+            const originalUserId = session.userId
+            session.userId = platformUserId
+
+            // 使用修改后的 session 进行过滤检查
+            const filterResult = ctx.filter(session)
+            logger.info('过滤器结果:', filterResult, '用户ID:', platformUserId)
+
+            // 恢复原始 userId
+            session.userId = originalUserId
+
+            if (!filterResult) {
+              logger.info('过滤器拦截，跳过处理')
+              return
+            }
+          } else {
+            logger.info('未找到用户绑定信息，跳过过滤')
+          }
+        }
+      } catch (error) {
+        logger.error('查询用户绑定信息失败:', error)
+      }
+    }
 
     try {
       const noiseMaker = makeNoise(config.noises)
